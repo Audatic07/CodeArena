@@ -3,77 +3,96 @@ import CodeMirror from '@uiw/react-codemirror';
 import { python } from '@codemirror/lang-python';
 
 function App() {
-  const [code, setCode] = useState("print('Welcome to CodeArena! 🚀')");
+  const [code, setCode] = useState("print('Hello CodeArena!')");
   const [output, setOutput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
+  const [xp, setXp] = useState(0);
 
-  // Clear errors when code changes
+  // XP persistence
   useEffect(() => {
-    setError('');
-  }, [code]);
+    const savedXp = localStorage.getItem('codearena-xp');
+    if (savedXp) setXp(Number(savedXp));
+  }, []);
+
+  useEffect(() => {
+    localStorage.setItem('codearena-xp', xp);
+  }, [xp]);
+
+  const decodeBase64 = (str) => {
+    try {
+      return atob(str);
+    } catch (e) {
+      return str; // Return original if not base64
+    }
+  };
 
   const runCode = async () => {
     setIsLoading(true);
     setOutput('');
+    setError('');
     let timeoutId = null;
 
     try {
-      // Step 1: Submit code to backend
+      // Execute code
       const executeResponse = await fetch('http://localhost:5000/execute', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ code }),
       });
-
-      if (!executeResponse.ok) {
-        throw new Error(`Backend error: ${executeResponse.statusText}`);
-      }
-
+      
+      if (!executeResponse.ok) throw new Error('Backend error');
       const { token } = await executeResponse.json();
 
-      // Step 2: Set timeout (10 seconds max)
+      // Timeout after 15 seconds
       timeoutId = setTimeout(() => {
         setError('⌛ Timeout: Execution took too long');
         setIsLoading(false);
-      }, 10000);
+      }, 15000);
 
-      // Step 3: Poll for results
+      // Poll results
       const intervalId = setInterval(async () => {
         try {
           const resultResponse = await fetch(
-            `http://localhost:5000/results/${token}?base64_encoded=false`
+            `http://localhost:5000/results/${token}?base64_encoded=true`
           );
-
-          if (!resultResponse.ok) {
-            throw new Error(`Result fetch failed: ${resultResponse.statusText}`);
-          }
-
+          
+          if (!resultResponse.ok) throw new Error('Result fetch failed');
           const resultData = await resultResponse.json();
 
-          // Handle Judge0 errors
-          if (resultData.stderr) {
-            throw new Error(resultData.stderr);
-          }
-
-          // Exit conditions
-          if (resultData.status.description !== 'Processing') {
+          // Handle final state
+          if (resultData.status?.description !== 'Processing') {
             clearInterval(intervalId);
             clearTimeout(timeoutId);
-            setOutput(resultData.stdout || '✅ Code executed successfully');
+
+            // Decode base64 responses
+            const decodedOutput = resultData.stdout 
+              ? decodeBase64(resultData.stdout)
+              : resultData.stderr
+              ? decodeBase64(resultData.stderr)
+              : 'No output';
+
+            // Update state
+            if (resultData.status?.id === 3) { // Success status
+              setXp(prev => prev + 10);
+              setOutput(decodedOutput);
+            } else {
+              setError(decodedOutput);
+            }
+            
             setIsLoading(false);
           }
         } catch (err) {
           clearInterval(intervalId);
           clearTimeout(timeoutId);
-          setError(`❌ Error: ${err.message}`);
+          setError(err.message);
           setIsLoading(false);
         }
       }, 1000);
 
     } catch (err) {
       clearTimeout(timeoutId);
-      setError(`🔥 Critical Error: ${err.message}`);
+      setError(err.message);
       setIsLoading(false);
     }
   };
@@ -81,7 +100,8 @@ function App() {
   return (
     <div style={styles.container}>
       <h1 style={styles.header}>CodeArena</h1>
-      
+      <div style={styles.xpBadge}>XP: {xp}</div>
+
       <CodeMirror
         value={code}
         height="400px"
@@ -170,6 +190,17 @@ const styles = {
     margin: 0,
     fontFamily: 'monospace',
     fontSize: '14px'
+  },
+  xpBadge: {
+    backgroundColor: '#27ae60',
+    color: 'white',
+    padding: '8px 16px',
+    borderRadius: '20px',
+    position: 'absolute',
+    top: '20px',
+    right: '20px',
+    fontWeight: 'bold',
+    display: 'inline-block'  // Add this to ensure proper rendering
   }
 };
 
